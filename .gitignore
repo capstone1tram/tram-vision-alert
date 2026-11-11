@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+logs/
+models/
+*_openvino_model/
+*_ncnn_model/
+*.pt
+*.onnx
+*.mp4
+*.avi
+rs19_val/
+jpgs/
