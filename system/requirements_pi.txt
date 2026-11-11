@@ -1,0 +1,5 @@
+# 라즈베리 파이 5 (Raspberry Pi OS 64-bit). picamera2·gpiozero는 OS에 이미 들어 있으므로
+# 가상환경을 --system-site-packages 로 만들어야 보입니다 (README 참고).
+pyzmq
+ultralytics>=8.3
+ncnn

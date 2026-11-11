@@ -1,0 +1,6 @@
+# 노트북 (Windows, Python 3.12)
+opencv-python>=4.8
+numpy
+pyzmq
+ultralytics>=8.3
+openvino>=2024.0
