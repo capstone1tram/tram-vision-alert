@@ -56,7 +56,7 @@
 
 ## 6. 저장소에서 보여 줄 곳
 
-- 시스템 전체 그림과 결과: [`README.md`](../README.md)
+- 시스템 전체 그림과 결과: [`README.md`](../README.md) (1장 활용법, 2장 포트폴리오 활용 요약)
 - 코드 구조: [`system/README.md`](../system/README.md)
 - 설계 근거가 담긴 보고서: [`docs/reports/트램_보고서_상세.pdf`](reports/트램_보고서_상세.pdf)
 - 발표 자료: [`docs/slides/`](slides/)
