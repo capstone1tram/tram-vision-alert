@@ -16,4 +16,6 @@
   ground    : 실제 영상 거리 (궤간 폭 지평선까지 연장)
   hud       : PC 화면 그리기
   recorder  : 위험 장면 자동 저장·캡처
+  roi       : 고정 카메라 소실점 ROI + 흔들림 보정 (approach_main.py)
+  approach  : 소실점 ROI 배경 차분 + 열차 크기 검사 + TTC (approach_main.py)
 """

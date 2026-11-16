@@ -49,6 +49,10 @@
 | `tram/recorder.py` | 경고 이상 장면 자동 저장(앞 3초~뒤 2초) + 캡처 + events.csv |
 | `settings_video.json` | 블랙박스 영상용 설정 (화각 추정 73°, 헛경보 줄이는 값들) |
 | `tools/video_probe.py` | 영상 정보·사진·짧은 구간 뽑기 + YOLO 모델 받기·OpenVINO 변환·CPU/GPU 속도 측정 |
+| `approach_main.py` | **고정 카메라 소실점 접근 감지 (파이 + 카메라 모듈 3).** 소실점 ROI·흔들림 보정·배경 차분·크기 검사·TTC + 실측 요약 (14절) |
+| `tram/roi.py` | 선로 검출로 소실점·궤간 기울기 고정(RailCalib), ROI 위치, 위상 상관 흔들림 보정(Stabilizer) |
+| `tram/approach.py` | 배경 차분(선택 갱신), 열차 크기 후보, 1/크기 직선 맞춤 TTC, 경보 등급(깜빡임 방지) |
+| `tools/make_approach_video.py` | 다가오는 열차 합성 영상(2304x1296) + 정답 CSV (흔들림·잡음·사람·옆 선로 열차 포함) |
 
 ## 2. 빠른 시작: 노트북 한 대, 하드웨어 없이 (약 10분)
 
@@ -298,6 +302,72 @@ python pc_main.py
 한계: 렌즈 왜곡(화면 가장자리), 분기기·교차로에서 옆 선로로 잘못 붙는 경우, 정류장 이름 자막·워터마크, 차 뒤에 가려진 사람, 영상의 트램 속도는 알 수 없음(상대 속도만 씀). 영상 저작권은 원 채널에 있으니 발표에 쓸 땐 출처를 밝히고 짧게만 쓰세요.
 
 **나중에 나눌 때**: 노트북은 `laptop_server.py`의 `make_handler` 안에서 `Perception(detector).process(frame, t)`를 부르면 되고, 파이는 `Guard(..., dist_fn=ground.obj_distance, visible_fn=ground.visible)`로 만들면 실제 영상용 거리 계산을 씁니다. 칼만·등급·연결 끊김 처리는 그대로입니다.
+
+## 14. 고정 카메라 소실점 접근 감지 (2026-11-16 추가)
+
+카메라를 **선로 위/옆에 고정**하고 선로 방향을 보게 둔 뒤, 멀리서 다가오는 열차를 찾습니다.
+열차는 처음에 소실점(두 레일이 만나는 점) 근처의 몇 픽셀이라, 화면 전체를 줄여 보면 사라집니다.
+그래서 2304x1296 센서 모드를 **줄이지 않고** 소실점 주변 320x160만 잘라 봅니다.
+
+![접근 감지 화면](../docs/analysis/approach_view.png)
+
+### 처리 순서 (`approach_main.py`)
+
+1. **소실점 고정** (`tram/roi.py` RailCalib): 처음 30프레임에서 `rails_photo.find_rails_ego`로 선로를 찾고,
+   평평한 바닥이면 궤간 픽셀 폭이 y에 대해 직선 `g(y) = k·(y − y_vp)` 이므로 g=0인 높이와 그 높이의 중심선 x를 소실점으로, 중앙값을 씀.
+   카메라가 레일 높이 근처로 낮으면 화면 아래에 레일 한 쌍이 안 보여 검출이 실패합니다. 그때는 `--vp x,y --cam-h 높이`.
+2. **흔들림 보정** (Stabilizer): ROI 양옆 8조각(무늬 없는 하늘 조각은 뺌)에서 첫 프레임 대비 이동량을 위상 상관으로 재고 **중앙값**으로 ROI를 되돌려 자름.
+   한두 조각에 사람·옆 선로 열차가 들어와도 중앙값이라 버팀.
+3. **배경 차분** (`tram/approach.py` Background): 픽셀별 평균·분산. 화면 전체 밝기 변화(구름)는 차이의 중앙값을 빼서 지움.
+   열차 후보·추적 상자 주변은 배경 갱신을 200배 느리게(선택 갱신). 정면으로 오는 열차는 거의 안 움직이고 커지기만 해서 프레임 차분으로는 안 잡힘.
+4. **크기 검사**: 덩어리 바닥 높이의 궤간 px × (열차 폭 3.0 m / 궤간 1.435 m) = 기대 폭. 실제 폭이 0.4~2.2배이고 선로 중심선 근처인 것만.
+5. **TTC**: 크기 s = sqrt(전경 픽셀 수). 등속이면 `1/s`가 시간에 대해 정확히 직선이라 `1/s`를 직선 맞춤, `TTC = −(1/s)/(d(1/s)/dt)`.
+   s를 직선 맞춤하면 가까울수록 TTC가 길게 나옴(실제 7초 → 10초). 작을수록 창을 늘림(1.5초 ~ 3초). **s ≥ 20 px일 때만 TTC 계산.**
+6. **등급**: 1 주의(열차 크기 물체 확정) / 2 경고(TTC < 15초) / 3 위험(TTC < 8초). 0.5초 이상 계속일 때만 바뀜. `--gpio`면 `tram/alarm.py` 부저·LED.
+
+### 실행
+
+```bash
+# 파이 (카메라 모듈 3). picamera2가 보이는 가상환경(--system-site-packages)에서
+python approach_main.py --pixels                                    # 거리별 예상 픽셀 수 표
+python approach_main.py --source picam --show                       # 모니터 연결 시
+python approach_main.py --source picam --save-calib calib.json --duration 60 --save-video view.mp4   # ssh, 화면 없이
+python approach_main.py --source picam --calib calib.json --gpio    # 저장한 소실점으로 바로 시작
+python approach_main.py --source picam --vp 1150,600 --cam-h 0.4    # 카메라가 낮아 선로 검출이 안 될 때 (first_frame.png 보고 소실점 좌표)
+python approach_main.py --source picam --record raw.mp4 --duration 30 --no-detect --fps 15   # 원본 녹화만 (PC로 옮겨 재시험)
+
+# PC (하드웨어 없이)
+python tools/make_approach_video.py                                 # approach_sample.mp4 + _truth.csv (약 1분)
+python approach_main.py --source approach_sample.mp4 --truth approach_sample_truth.csv --show
+```
+
+카메라 설정은 `--lock auto`(기본)면 처음 1.5초 자동으로 맞춘 뒤 **노출·게인·화이트밸런스를 고정**하고, 초점은 `LensPosition 0`(무한대)으로 고정합니다.
+자동 노출을 켜 두면 열차 전조등이 들어올 때 화면 전체 밝기가 바뀌어 배경 차분이 화면 전체를 잡습니다.
+**시작 후 `--warmup`(30프레임 = 1초) 동안은 열차가 없어야 합니다** (배경 학습).
+
+### 끝나면 나오는 실측 요약 (`approach_out/summary.json`, 프레임별은 `frames.csv`)
+
+| 항목 | 뜻 | 확인할 것 |
+|---|---|---|
+| 루프 fps / ROI 처리 ms | 카메라 포함 실제 속도, ROI 처리만의 시간 | 파이에서 30 fps가 유지되는지 |
+| 흔들림 표준편차·최대 (px) | 보정한 이동량 | 열차가 올 때 레일 진동이 얼마나 커지는지 |
+| 배경 잡음 | 픽셀 밝기의 시간 표준편차 중앙값 (0~255) | 정지 장면에서 2~3 이하면 좋음. 크면 게인 낮추기 |
+| 열차 없을 때 전경 비율 | 헛 변화의 양 | 아지랑이·나뭇잎이면 커짐 |
+| 잡힌 열차 최대 크기, 처음 확정·경고·위험 시각 | | 실제 거리와 맞춰 보기 (`--truth`면 자동 채점) |
+
+### 합성 영상 결과 (PC, 2304x1296, 30 fps)
+
+| 장면 | 처음 확정 | 첫 경고 때 실제 TTC | 첫 위험 때 실제 TTC | TTC 상대 오차 (중앙 / 90%) |
+|---|---|---|---|---|
+| 카메라 1.5 m, 80 km/h, 900 m에서 등장 | 896 m | 11.9 초 | 6.7 초 | 8.9% / 20% |
+| 카메라 0.5 m(`--vp --cam-h`), 60 km/h, 700 m | 695 m | 15.9 초 | 7.6 초 | 8.2% / 23% |
+| 열차 없음 (사람·옆 선로 열차만) | 없음 | 없음 | 없음 | - |
+
+- 흔들림 보정 오차는 정답 대비 0.1 px. 끄면(`--no-stab`) TTC를 거의 못 냄.
+- 80 km/h에서는 TTC를 믿을 수 있는 20 px(약 320 m, TTC 약 14초)부터 경고가 가능. 그보다 먼 곳은 "주의"(있다/없다)만.
+  더 일찍 경고하려면 원본 4608 모드(크기 2배, 약 14 fps)나 망원 렌즈가 필요.
+- PC ROI 처리 약 2 ms. 파이 5는 이보다 몇 배 느릴 것으로 보지만 **아직 파이에서 재지 않음**.
+- 합성 영상은 이상적인 장면이라 실제 아지랑이·그림자·역광에서는 더 나쁠 수 있음. 파이로 녹화해 `--source raw.mp4`로 다시 돌려 볼 것.
 
 ## 출처·라이선스
 
